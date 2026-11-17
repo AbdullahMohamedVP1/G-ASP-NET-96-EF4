@@ -9,7 +9,7 @@ using NationalBank.Models;
 
 Console.OutputEncoding = Encoding.UTF8;
 
-// The connection is opened/used by this context and closed when it is disposed (on Exit)
+// the context is disposed automatically when the program ends
 using var db = new BankDbContext();
 
 bool running = true;
@@ -48,12 +48,10 @@ while (running)
     Pause();
 }
 
-db.Dispose(); // close the connection explicitly
 Console.WriteLine("Goodbye!");
 
-// =====================================================================
-// Menu
-// =====================================================================
+
+//   menu  
 static void ShowMenu()
 {
     Console.WriteLine("========================================");
@@ -65,35 +63,32 @@ static void ShowMenu()
     Console.WriteLine("  4) Remove an Account from a Customer");
     Console.WriteLine("  5) List all Customers (with accounts)");
     Console.WriteLine("  0) Exit");
-    Console.WriteLine("----------------------------------------");
+    Console.WriteLine("    ");
     Console.Write("  Enter choice: ");
 }
 
-// =====================================================================
-// 1) Add Customer
-// =====================================================================
+
+//   1) add customer  
 static void AddCustomer(BankDbContext db)
 {
     Console.WriteLine("--- Add New Customer ---");
 
-    string fullName = ReadRequired("Full Name      : ", 3, 100);
+    string name = ReadText("Full Name      : ", 3, 100);
     string nationalId = ReadNationalId(db);
-    DateTime dob = ReadDateOfBirth();
+    DateTime birthDate = ReadBirthDate();
     string email = ReadEmail();
     string phone = ReadPhone();
-    string address = ReadRequired("Address        : ", 5, 200);
-    CustomerType type = ReadEnumChoice<CustomerType>("Customer Type:");
+    string address = ReadText("Address        : ", 5, 200);
+    CustomerType customerType = ReadEnum<CustomerType>("Customer Type:");
 
-    var customer = new Customer
-    {
-        FullName = fullName,
-        NationalId = nationalId,
-        DateOfBirth = dob,
-        Email = email,
-        PhoneNumber = phone,
-        Address = address,
-        CustomerType = type
-    };
+    Customer customer = new Customer();
+    customer.FullName = name;
+    customer.NationalId = nationalId;
+    customer.DateOfBirth = birthDate;
+    customer.Email = email;
+    customer.PhoneNumber = phone;
+    customer.Address = address;
+    customer.CustomerType = customerType;
 
     db.Customers.Add(customer);
     db.SaveChanges();
@@ -102,71 +97,73 @@ static void AddCustomer(BankDbContext db)
     Success($"Customer created successfully. CustomerId = {customer.Id}");
 }
 
-// =====================================================================
-// 2) Open Account
-// =====================================================================
+
+//   2) open account  
 static void OpenAccount(BankDbContext db)
 {
     Console.WriteLine("--- Open New Account ---");
 
     string accountNumber = ReadAccountNumber("Account Number : ");
-    AccountType accountType = ReadEnumChoice<AccountType>("Account Type:");
-    string branchCode = ReadRequired("Branch Code    : ", 1, 10);
+    AccountType accountType = ReadEnum<AccountType>("Account Type:");
+    string branchCode = ReadText("Branch Code    : ", 1, 10);
     int customerId = ReadInt("Customer Id    : ");
-    OwnershipType role = ReadEnumChoice<OwnershipType>("Ownership Role:");
+    OwnershipType role = ReadEnum<OwnershipType>("Ownership Role:");
 
     Info($"Validating branch '{branchCode}' and customer #{customerId}...");
 
+    // check the branch
     var branch = db.Branches.FirstOrDefault(b => b.Code == branchCode);
-    if (branch is null)
+    if (branch == null)
     {
         Error($"Branch '{branchCode}' does not exist.");
         return;
     }
 
+    // check the customer
     var customer = db.Customers.Find(customerId);
-    if (customer is null)
+    if (customer == null)
     {
         Error($"Customer #{customerId} does not exist.");
         return;
     }
 
+    // see if the account is already there
     var account = db.Accounts
         .Include(a => a.CustomerAccounts)
         .FirstOrDefault(a => a.AccountNumber == accountNumber);
 
-    if (account is null)
+    if (account == null)
     {
-        // Brand-new account: it must start with a Primary owner
+        // new account so the first owner has to be Primary
         if (role != OwnershipType.Primary)
         {
             Error("A new account must be opened with a Primary owner first.");
             return;
         }
 
-        account = new Account
-        {
-            AccountNumber = accountNumber,
-            AccountType = accountType,
-            BranchCode = branch.Code,
-            CurrentBalance = 0m,
-            OpeningDate = DateTime.Now
-        };
+        account = new Account();
+        account.AccountNumber = accountNumber;
+        account.AccountType = accountType;
+        account.BranchCode = branch.Code;
+        account.CurrentBalance = 0m;
+        account.OpeningDate = DateTime.Now;
         db.Accounts.Add(account);
     }
     else
     {
-        // Existing account => joint account scenario (add another owner)
+        // account exists so this is a joint account, we just add another owner
         if (account.BranchCode != branch.Code || account.AccountType != accountType)
         {
             Error($"Account '{accountNumber}' already exists as {account.AccountType} at branch '{account.BranchCode}'.");
             return;
         }
+
         if (account.CustomerAccounts.Any(ca => ca.CustomerId == customerId))
         {
             Error($"Customer #{customerId} is already linked to account '{accountNumber}'.");
             return;
         }
+
         if (role == OwnershipType.Primary &&
             account.CustomerAccounts.Any(ca => ca.OwnershipType == OwnershipType.Primary))
         {
@@ -175,22 +172,20 @@ static void OpenAccount(BankDbContext db)
         }
     }
 
-    db.CustomerAccounts.Add(new CustomerAccount
-    {
-        CustomerId = customerId,
-        AccountNumber = account.AccountNumber,
-        OwnershipType = role,
-        OwnershipStartDate = DateTime.Now,
-        AccountStatus = AccountStatus.Active
-    });
+    CustomerAccount link = new CustomerAccount();
+    link.CustomerId = customerId;
+    link.AccountNumber = account.AccountNumber;
+    link.OwnershipType = role;
+    link.OwnershipStartDate = DateTime.Now;
+    link.AccountStatus = AccountStatus.Active;
+    db.CustomerAccounts.Add(link);
 
     db.SaveChanges();
     Success($"Account '{account.AccountNumber}' created and linked to customer {customerId} as {role} owner.");
 }
 
-// =====================================================================
-// 3) Update Account Status
-// =====================================================================
+
+//   3) update status  
 static void UpdateAccountStatus(BankDbContext db)
 {
     Console.WriteLine("--- Update Account Status ---");
@@ -201,13 +196,13 @@ static void UpdateAccountStatus(BankDbContext db)
     var link = db.CustomerAccounts
         .FirstOrDefault(ca => ca.AccountNumber == accountNumber && ca.CustomerId == customerId);
 
-    if (link is null)
+    if (link == null)
     {
         Error("No link found between this account and this customer.");
         return;
     }
 
-    AccountStatus newStatus = ReadEnumChoice<AccountStatus>("New Status:");
+    AccountStatus newStatus = ReadEnum<AccountStatus>("New Status:");
 
     if (link.AccountStatus == newStatus)
     {
@@ -220,9 +215,8 @@ static void UpdateAccountStatus(BankDbContext db)
     Success($"Status updated to {newStatus}.");
 }
 
-// =====================================================================
-// 4) Remove Account from Customer
-// =====================================================================
+
+//   4) remove account from customer  
 static void RemoveAccountFromCustomer(BankDbContext db)
 {
     Console.WriteLine("--- Remove Account From Customer ---");
@@ -233,13 +227,13 @@ static void RemoveAccountFromCustomer(BankDbContext db)
     var link = db.CustomerAccounts
         .FirstOrDefault(ca => ca.AccountNumber == accountNumber && ca.CustomerId == customerId);
 
-    if (link is null)
+    if (link == null)
     {
         Error("No link found between this account and this customer.");
         return;
     }
 
-    string realAccountNumber = link.AccountNumber;
+    string number = link.AccountNumber;
 
     db.CustomerAccounts.Remove(link);
     db.SaveChanges();
@@ -247,36 +241,36 @@ static void RemoveAccountFromCustomer(BankDbContext db)
     Console.WriteLine();
     Success("  Ownership link deleted.");
 
-    // If nobody owns the account anymore, remove the account too
-    bool hasOtherOwners = db.CustomerAccounts.Any(ca => ca.AccountNumber == realAccountNumber);
-    if (!hasOtherOwners)
+    // if no one owns the account anymore we try to delete it
+    bool stillHasOwners = db.CustomerAccounts.Any(ca => ca.AccountNumber == number);
+    if (stillHasOwners)
+        return;
+
+    bool hasTransactions = db.Transactions.Any(t => t.AccountNumber == number);
+    if (hasTransactions)
     {
-        bool hasTransactions = db.Transactions.Any(t => t.AccountNumber == realAccountNumber);
-        if (hasTransactions)
+        Info($"      That was the last owner, but account '{number}' has transaction history, so it was kept.");
+    }
+    else
+    {
+        var account = db.Accounts.Find(number);
+        if (account != null)
         {
-            Info($"      That was the last owner, but account '{realAccountNumber}' has transaction history, so it was kept.");
+            db.Accounts.Remove(account);
+            db.SaveChanges();
         }
-        else
-        {
-            var account = db.Accounts.Find(realAccountNumber);
-            if (account is not null)
-            {
-                db.Accounts.Remove(account);
-                db.SaveChanges();
-            }
-            Info($"      That was the last owner — account '{realAccountNumber}' was also removed.");
-        }
+        Info($"      That was the last owner — account '{number}' was also removed.");
     }
 }
 
-// =====================================================================
-// 5) List all Customers (Eager Loading)
-// =====================================================================
+
+//   5) list customers  
 static void ListCustomers(BankDbContext db)
 {
     Console.WriteLine("--- All Customers ---");
     Console.WriteLine();
 
+    // eager loading: accounts and the branch of each account
     var customers = db.Customers
         .AsNoTracking()
         .Include(c => c.CustomerAccounts)
@@ -311,22 +305,22 @@ static void ListCustomers(BankDbContext db)
     }
 }
 
-// =====================================================================
-// Input helpers (never crash on bad input)
-// =====================================================================
-static string ReadRequired(string prompt, int minLen, int maxLen)
+
+//   input methods (keep asking until the input is valid)  
+static string ReadText(string prompt, int min, int max)
 {
     while (true)
     {
         Console.Write(prompt);
-        string input = (Console.ReadLine() ?? "").Trim();
+        string text = (Console.ReadLine() ?? "").Trim();
 
-        if (input.Length < minLen || input.Length > maxLen)
+        if (text.Length < min || text.Length > max)
         {
-            Error($"Value is required and must be between {minLen} and {maxLen} characters.");
+            Error($"Value is required and must be between {min} and {max} characters.");
             continue;
         }
-        return input;
+
+        return text;
     }
 }
 
@@ -335,8 +329,10 @@ static int ReadInt(string prompt)
     while (true)
     {
         Console.Write(prompt);
-        if (int.TryParse(Console.ReadLine()?.Trim(), out int value) && value > 0)
-            return value;
+        string? text = Console.ReadLine()?.Trim();
+
+        if (int.TryParse(text, out int number) && number > 0)
+            return number;
 
         Error("Please enter a valid positive number.");
     }
@@ -347,10 +343,10 @@ static string ReadAccountNumber(string prompt)
     while (true)
     {
         Console.Write(prompt);
-        string input = (Console.ReadLine() ?? "").Trim();
+        string text = (Console.ReadLine() ?? "").Trim();
 
-        if (Regex.IsMatch(input, @"^[A-Za-z0-9\-]{4,20}$"))
-            return input;
+        if (Regex.IsMatch(text, @"^[A-Za-z0-9\-]{4,20}$"))
+            return text;
 
         Error("Account number must be 4-20 characters (letters, digits, or '-').");
     }
@@ -361,41 +357,48 @@ static string ReadNationalId(BankDbContext db)
     while (true)
     {
         Console.Write("National ID    : ");
-        string input = (Console.ReadLine() ?? "").Trim();
+        string text = (Console.ReadLine() ?? "").Trim();
 
-        if (!Regex.IsMatch(input, @"^\d{14}$"))
+        if (!Regex.IsMatch(text, @"^\d{14}$"))
         {
             Error("National ID must be exactly 14 digits.");
             continue;
         }
-        if (db.Customers.Any(c => c.NationalId == input))
+
+        if (db.Customers.Any(c => c.NationalId == text))
         {
             Error("A customer with this National ID already exists.");
             continue;
         }
-        return input;
+
+        return text;
     }
 }
 
-static DateTime ReadDateOfBirth()
+static DateTime ReadBirthDate()
 {
     while (true)
     {
         Console.Write("Date of Birth  : (yyyy-MM-dd) ");
-        string input = (Console.ReadLine() ?? "").Trim();
+        string text = (Console.ReadLine() ?? "").Trim();
 
-        if (!DateTime.TryParseExact(input, "yyyy-MM-dd", CultureInfo.InvariantCulture,
-                DateTimeStyles.None, out DateTime dob))
+        bool ok = DateTime.TryParseExact(text, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+            DateTimeStyles.None, out DateTime date);
+
+        if (!ok)
         {
             Error("Invalid date. Use the format yyyy-MM-dd (e.g. 2000-01-25).");
             continue;
         }
-        if (dob < new DateTime(1900, 1, 1) || dob > DateTime.Today.AddYears(-18))
+
+        // must be 18 or older
+        if (date < new DateTime(1900, 1, 1) || date > DateTime.Today.AddYears(-18))
         {
             Error("Customer must be at least 18 years old (and born after 1900).");
             continue;
         }
-        return dob;
+
+        return date;
     }
 }
 
@@ -404,15 +407,18 @@ static string ReadEmail()
     while (true)
     {
         Console.Write("Email          : ");
-        string input = (Console.ReadLine() ?? "").Trim();
+        string text = (Console.ReadLine() ?? "").Trim();
 
         try
         {
-            var addr = new MailAddress(input);
-            if (addr.Address == input && input.Length <= 150 && input.Contains('.'))
-                return input;
+            MailAddress mail = new MailAddress(text);
+            if (mail.Address == text && text.Length <= 150 && text.Contains('.'))
+                return text;
         }
-        catch (FormatException) { }
+        catch (FormatException)
+        {
+            // not a valid email, the error below will show
+        }
 
         Error("Invalid email address.");
     }
@@ -423,16 +429,17 @@ static string ReadPhone()
     while (true)
     {
         Console.Write("Phone          : ");
-        string input = (Console.ReadLine() ?? "").Trim();
+        string text = (Console.ReadLine() ?? "").Trim();
 
-        if (Regex.IsMatch(input, @"^\+?\d{8,15}$"))
-            return input;
+        if (Regex.IsMatch(text, @"^\+?\d{8,15}$"))
+            return text;
 
         Error("Phone must contain 8-15 digits (optional leading +).");
     }
 }
 
-static T ReadEnumChoice<T>(string title) where T : struct, Enum
+// shows the enum values as a numbered list and returns the one the user picked
+static T ReadEnum<T>(string title) where T : struct, Enum
 {
     var values = Enum.GetValues<T>();
 
@@ -440,30 +447,42 @@ static T ReadEnumChoice<T>(string title) where T : struct, Enum
     {
         Console.WriteLine(title);
         for (int i = 0; i < values.Length; i++)
+        {
             Console.WriteLine($"    {i + 1}) {values[i]}");
+        }
         Console.Write("  Choice: ");
 
-        if (int.TryParse(Console.ReadLine()?.Trim(), out int choice) &&
-            choice >= 1 && choice <= values.Length)
-            return values[choice - 1];
+        string? text = Console.ReadLine()?.Trim();
+        if (int.TryParse(text, out int number) && number >= 1 && number <= values.Length)
+            return values[number - 1];
 
         Error($"Please choose a number between 1 and {values.Length}.");
     }
 }
 
-// =====================================================================
-// Console helpers
-// =====================================================================
-static void Success(string msg) => WriteColored(msg, ConsoleColor.Green);
-static void Error(string msg) => WriteColored(msg, ConsoleColor.Red);
-static void Info(string msg) => WriteColored(msg, ConsoleColor.Cyan);
 
-static void WriteColored(string msg, ConsoleColor color)
+//   console helpers  
+static void Success(string message)
 {
-    var old = Console.ForegroundColor;
+    Print(message, ConsoleColor.Green);
+}
+
+static void Error(string message)
+{
+    Print(message, ConsoleColor.Red);
+}
+
+static void Info(string message)
+{
+    Print(message, ConsoleColor.Cyan);
+}
+
+static void Print(string message, ConsoleColor color)
+{
+    ConsoleColor oldColor = Console.ForegroundColor;
     Console.ForegroundColor = color;
-    Console.WriteLine(msg);
-    Console.ForegroundColor = old;
+    Console.WriteLine(message);
+    Console.ForegroundColor = oldColor;
 }
 
 static void Pause()
